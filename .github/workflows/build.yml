@@ -115,6 +115,24 @@ jobs:
             "X-GitHub-Api-Version" = "2022-11-28"
           }
 
+          # Elimina release/tag esistenti con lo stesso nome (da run precedenti falliti)
+          try {
+            $existing = Invoke-RestMethod `
+              -Uri "https://api.github.com/repos/$repo/releases/tags/$tagName" `
+              -Headers $headers -Method GET
+            Write-Host "Deleting existing release $($existing.id)..."
+            Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/$($existing.id)" `
+              -Headers $headers -Method DELETE
+          } catch { Write-Host "No existing release to delete" }
+
+          try {
+            Invoke-RestMethod `
+              -Uri "https://api.github.com/repos/$repo/git/refs/tags/$tagName" `
+              -Headers $headers -Method DELETE
+            Write-Host "Deleted existing tag"
+          } catch { Write-Host "No existing tag to delete" }
+
+          # Crea la release
           $releaseBody = @{
             tag_name         = $tagName
             target_commitish = "main"
@@ -131,6 +149,7 @@ jobs:
 
           Write-Host "Release created: $($release.id)"
 
+          # Carica il file
           $uploadUrl = "https://uploads.github.com/repos/$repo/releases/$($release.id)/assets?name=$installerName"
           $fileBytes = [System.IO.File]::ReadAllBytes((Resolve-Path $installerPath))
           Invoke-RestMethod -Uri $uploadUrl -Method POST -Headers $headers `
