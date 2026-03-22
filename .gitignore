@@ -1,0 +1,9 @@
+node_modules/
+dist/
+output/
+config.json
+installer_build.iss
+installer.iss
+*.log
+.DS_Store
+Thumbs.db

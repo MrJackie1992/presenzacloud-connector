@@ -1,0 +1,108 @@
+name: Build Connector Installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      token:
+        description: "Activation token (will be embedded in installer)"
+        required: true
+      company_name:
+        description: "Company name (for installer label)"
+        required: true
+      consultant_email:
+        description: "Consultant email to notify when done"
+        required: true
+      callback_url:
+        description: "Backend webhook URL to call when build completes"
+        required: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Install pkg
+        run: npm install -g pkg
+
+      - name: Build connector.exe
+        run: pkg connector.js --target node18-win-x64 --output dist/connector.exe
+
+      - name: Build setup-wizard.exe
+        run: pkg setup-wizard.js --target node18-win-x64 --output dist/setup-wizard.exe
+
+      - name: Download Inno Setup
+        run: |
+          $url = "https://jrsoftware.org/download.php/is.exe"
+          Invoke-WebRequest -Uri $url -OutFile inno-setup.exe
+          Start-Process -FilePath "inno-setup.exe" -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART" -Wait
+
+      - name: Inject token into installer script
+        shell: pwsh
+        run: |
+          $token = "${{ github.event.inputs.token }}"
+          $content = Get-Content installer.iss -Raw
+          $content = $content -replace '#define PresetToken ""', "#define PresetToken `"$token`""
+          $content | Set-Content installer_build.iss -Encoding UTF8
+
+      - name: Compile installer
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer_build.iss
+
+      - name: Rename installer with token prefix
+        shell: pwsh
+        run: |
+          $token = "${{ github.event.inputs.token }}"
+          $short = $token.Substring(0, 16)
+          $src = "dist\PresenzaCloud-Connector-Setup.exe"
+          $dst = "dist\PresenzaCloud-Connector-Setup-$short.exe"
+          Rename-Item $src $dst
+          echo "INSTALLER_NAME=PresenzaCloud-Connector-Setup-$short.exe" >> $env:GITHUB_ENV
+          echo "INSTALLER_PATH=dist\PresenzaCloud-Connector-Setup-$short.exe" >> $env:GITHUB_ENV
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "connector-${{ github.event.inputs.token }}"
+          name: "Connector — ${{ github.event.inputs.company_name }}"
+          body: |
+            Installer generato automaticamente per: **${{ github.event.inputs.company_name }}**
+
+            Token: `${{ github.event.inputs.token }}`
+
+            ⚠️ Questo installer è mono-uso e pre-configurato per questa azienda specifica.
+          files: ${{ env.INSTALLER_PATH }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Notify backend (send email via webhook)
+        shell: pwsh
+        run: |
+          $downloadUrl = "${{ steps.create_release.outputs.url }}/releases/download/connector-${{ github.event.inputs.token }}/${{ env.INSTALLER_NAME }}"
+
+          # Costruiamo l'URL diretto all'asset (softprops action restituisce la release URL, non l'asset)
+          $repo = "${{ github.repository }}"
+          $tag  = "connector-${{ github.event.inputs.token }}"
+          $name = "${{ env.INSTALLER_NAME }}"
+          $downloadUrl = "https://github.com/$repo/releases/download/$tag/$name"
+
+          $body = @{
+            token           = "${{ github.event.inputs.token }}"
+            consultantEmail = "${{ github.event.inputs.consultant_email }}"
+            companyName     = "${{ github.event.inputs.company_name }}"
+            downloadUrl     = $downloadUrl
+            secret          = "${{ secrets.CALLBACK_SECRET }}"
+          } | ConvertTo-Json
+
+          Invoke-RestMethod `
+            -Uri "${{ github.event.inputs.callback_url }}" `
+            -Method POST `
+            -ContentType "application/json" `
+            -Body $body

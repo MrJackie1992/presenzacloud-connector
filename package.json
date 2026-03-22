@@ -1,0 +1,18 @@
+{
+  "name": "presenzacloud-connector",
+  "version": "1.0.0",
+  "description": "PresenzaCloud local connector for payroll software integration",
+  "main": "connector.js",
+  "scripts": {
+    "start": "node connector.js",
+    "test": "node connector.js --test",
+    "setup": "node setup-wizard.js",
+    "build": "powershell -ExecutionPolicy Bypass -File build.ps1",
+    "build:usb": "powershell -ExecutionPolicy Bypass -File build.ps1 -Token"
+  },
+  "pkg": {
+    "targets": ["node18-win-x64"],
+    "assets": [],
+    "outputPath": "dist"
+  }
+}
