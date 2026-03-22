@@ -82,16 +82,15 @@ jobs:
           $token = $env:ACTIVATION_TOKEN
           $short = $token.Substring(0, [Math]::Min(16, $token.Length))
 
-          # Trova l'exe generato da Inno Setup (qualunque sia il nome)
-          $generated = Get-ChildItem dist\ -Filter "*.exe" | Select-Object -First 1
-          if (-not $generated) { throw "Nessun .exe trovato in dist/" }
-          Write-Host "Found: $($generated.Name)"
+          $generated = Get-ChildItem dist\ -Filter "PresenzaCloud-Connector-Setup.exe" | Select-Object -First 1
+          if (-not $generated) { throw "Nessun installer trovato in dist/" }
 
-          $dst = "dist\PresenzaCloud-Connector-Setup-$short.exe"
-          Rename-Item $generated.FullName $dst
-          echo "INSTALLER_NAME=PresenzaCloud-Connector-Setup-$short.exe" >> $env:GITHUB_ENV
-          echo "INSTALLER_PATH=dist\PresenzaCloud-Connector-Setup-$short.exe" >> $env:GITHUB_ENV
-          Write-Host "Renamed to: $dst"
+          $newName = "PresenzaCloud-Connector-Setup-$short.exe"
+          Rename-Item -Path $generated.FullName -NewName $newName
+          Write-Host "Renamed to: $newName"
+
+          echo "INSTALLER_NAME=$newName" >> $env:GITHUB_ENV
+          echo "INSTALLER_PATH=dist\$newName" >> $env:GITHUB_ENV
 
       - name: Create GitHub Release
         id: create_release
