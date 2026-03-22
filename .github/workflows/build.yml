@@ -32,6 +32,16 @@ jobs:
       CALLBACK_URL: ${{ github.event.inputs.callback_url }}
 
     steps:
+      - name: Debug inputs
+        shell: pwsh
+        run: |
+          Write-Host "=== INPUTS ==="
+          Write-Host "token input: '${{ github.event.inputs.token }}'"
+          Write-Host "company_name: '${{ github.event.inputs.company_name }}'"
+          Write-Host "=== ENV ==="
+          Write-Host "ACTIVATION_TOKEN: '$env:ACTIVATION_TOKEN'"
+          Write-Host "COMPANY_NAME: '$env:COMPANY_NAME'"
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -60,11 +70,10 @@ jobs:
         shell: pwsh
         run: |
           $token = $env:ACTIVATION_TOKEN
-          Write-Host "Token length: $($token.Length)"
+          Write-Host "Injecting token (length: $($token.Length))"
           $content = Get-Content installer.iss -Raw
           $content = $content -replace '#define PresetToken ""', "#define PresetToken `"$token`""
           $content | Set-Content installer_build.iss -Encoding UTF8
-          Write-Host "installer_build.iss created"
 
       - name: Compile installer
         shell: pwsh
@@ -72,29 +81,18 @@ jobs:
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer_build.iss
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed" }
 
-      - name: List dist folder
-        shell: pwsh
-        run: |
-          Write-Host "Contents of dist/:"
-          Get-ChildItem dist\ | ForEach-Object { Write-Host "  $($_.Name)" }
-
       - name: Rename and set output paths
         shell: pwsh
         run: |
           $token = $env:ACTIVATION_TOKEN
           $short = $token.Substring(0, [Math]::Min(16, $token.Length))
-
           $generated = Get-ChildItem dist\ -Filter "PresenzaCloud-Connector-Setup.exe" | Select-Object -First 1
           if (-not $generated) { throw "Nessun installer trovato in dist/" }
-
           $newName = "PresenzaCloud-Connector-Setup-$short.exe"
           Rename-Item -Path $generated.FullName -NewName $newName
           Write-Host "Renamed to: $newName"
-
           echo "INSTALLER_NAME=$newName" >> $env:GITHUB_ENV
           echo "INSTALLER_PATH=dist\$newName" >> $env:GITHUB_ENV
-          echo "RELEASE_TAG=connector-$token" >> $env:GITHUB_ENV
-          echo "RELEASE_NAME=Connector — $env:COMPANY_NAME" >> $env:GITHUB_ENV
 
       - name: Create Release and upload installer
         shell: pwsh
@@ -112,16 +110,15 @@ jobs:
           Write-Host "File: $installerPath"
 
           $headers = @{
-            "Authorization" = "Bearer $env:GH_TOKEN"
-            "Accept"        = "application/vnd.github+json"
+            "Authorization"        = "Bearer $env:GH_TOKEN"
+            "Accept"               = "application/vnd.github+json"
             "X-GitHub-Api-Version" = "2022-11-28"
           }
 
-          # 1. Crea la release
           $releaseBody = @{
             tag_name         = $tagName
             target_commitish = "main"
-            name             = "Connector — $company"
+            name             = "Connector - $company"
             body             = "Installer generato per: $company"
             draft            = $false
             prerelease       = $false
@@ -129,27 +126,18 @@ jobs:
 
           $release = Invoke-RestMethod `
             -Uri "https://api.github.com/repos/$repo/releases" `
-            -Method POST `
-            -Headers $headers `
-            -Body $releaseBody `
-            -ContentType "application/json"
+            -Method POST -Headers $headers `
+            -Body $releaseBody -ContentType "application/json"
 
           Write-Host "Release created: $($release.id)"
 
-          # 2. Carica il file
           $uploadUrl = "https://uploads.github.com/repos/$repo/releases/$($release.id)/assets?name=$installerName"
           $fileBytes = [System.IO.File]::ReadAllBytes((Resolve-Path $installerPath))
-
-          Invoke-RestMethod `
-            -Uri $uploadUrl `
-            -Method POST `
-            -Headers $headers `
-            -Body $fileBytes `
-            -ContentType "application/octet-stream" | Out-Null
+          Invoke-RestMethod -Uri $uploadUrl -Method POST -Headers $headers `
+            -Body $fileBytes -ContentType "application/octet-stream" | Out-Null
 
           Write-Host "Asset uploaded"
 
-          # 3. Salva download URL per il webhook
           $downloadUrl = "https://github.com/$repo/releases/download/$tagName/$installerName"
           echo "DOWNLOAD_URL=$downloadUrl" >> $env:GITHUB_ENV
           Write-Host "Download URL: $downloadUrl"
@@ -166,7 +154,8 @@ jobs:
           } | ConvertTo-Json -Compress
 
           try {
-            Invoke-RestMethod -Uri $env:CALLBACK_URL -Method POST -ContentType "application/json" -Body $body
+            Invoke-RestMethod -Uri $env:CALLBACK_URL -Method POST `
+              -ContentType "application/json" -Body $body
             Write-Host "Webhook notified successfully"
           } catch {
             Write-Host "Webhook failed (non-blocking): $_"
