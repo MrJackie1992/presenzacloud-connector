@@ -22,6 +22,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write
 
     env:
       ACTIVATION_TOKEN: ${{ github.event.inputs.token }}
