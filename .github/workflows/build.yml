@@ -15,6 +15,9 @@ on:
       callback_url:
         description: "Backend webhook URL to call when build completes"
         required: true
+  push:
+    branches:
+      - main
 
 jobs:
   build:
