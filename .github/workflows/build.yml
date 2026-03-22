@@ -23,6 +23,12 @@ jobs:
   build:
     runs-on: windows-latest
 
+    env:
+      ACTIVATION_TOKEN: ${{ github.event.inputs.token }}
+      COMPANY_NAME: ${{ github.event.inputs.company_name }}
+      CONSULTANT_EMAIL: ${{ github.event.inputs.consultant_email }}
+      CALLBACK_URL: ${{ github.event.inputs.callback_url }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -41,34 +47,40 @@ jobs:
       - name: Build setup-wizard.exe
         run: pkg setup-wizard.js --target node18-win-x64 --output dist/setup-wizard.exe
 
-      - name: Download Inno Setup
+      - name: Download and install Inno Setup
+        shell: pwsh
         run: |
-          $url = "https://jrsoftware.org/download.php/is.exe"
-          Invoke-WebRequest -Uri $url -OutFile inno-setup.exe
+          Invoke-WebRequest -Uri "https://jrsoftware.org/download.php/is.exe" -OutFile inno-setup.exe
           Start-Process -FilePath "inno-setup.exe" -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART" -Wait
+          Write-Host "Inno Setup installed"
 
       - name: Inject token into installer script
         shell: pwsh
         run: |
-          $token = "${{ github.event.inputs.token }}"
+          $token = $env:ACTIVATION_TOKEN
+          Write-Host "Token length: $($token.Length)"
           $content = Get-Content installer.iss -Raw
           $content = $content -replace '#define PresetToken ""', "#define PresetToken `"$token`""
           $content | Set-Content installer_build.iss -Encoding UTF8
+          Write-Host "installer_build.iss created"
 
       - name: Compile installer
-        run: |
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer_build.iss
-
-      - name: Rename installer with token prefix
         shell: pwsh
         run: |
-          $token = "${{ github.event.inputs.token }}"
-          $short = $token.Substring(0, 16)
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer_build.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed" }
+
+      - name: Rename and set output paths
+        shell: pwsh
+        run: |
+          $token = $env:ACTIVATION_TOKEN
+          $short = $token.Substring(0, [Math]::Min(16, $token.Length))
           $src = "dist\PresenzaCloud-Connector-Setup.exe"
           $dst = "dist\PresenzaCloud-Connector-Setup-$short.exe"
           Rename-Item $src $dst
           echo "INSTALLER_NAME=PresenzaCloud-Connector-Setup-$short.exe" >> $env:GITHUB_ENV
           echo "INSTALLER_PATH=dist\PresenzaCloud-Connector-Setup-$short.exe" >> $env:GITHUB_ENV
+          Write-Host "Installer: $dst"
 
       - name: Create GitHub Release
         id: create_release
@@ -77,35 +89,31 @@ jobs:
           tag_name: "connector-${{ github.event.inputs.token }}"
           name: "Connector — ${{ github.event.inputs.company_name }}"
           body: |
-            Installer generato automaticamente per: **${{ github.event.inputs.company_name }}**
+            Installer generato per: **${{ github.event.inputs.company_name }}**
 
-            Token: `${{ github.event.inputs.token }}`
-
-            ⚠️ Questo installer è mono-uso e pre-configurato per questa azienda specifica.
+            ⚠️ Installer mono-uso pre-configurato per questa azienda.
           files: ${{ env.INSTALLER_PATH }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Notify backend (send email via webhook)
+      - name: Notify backend via webhook
         shell: pwsh
         run: |
-          $downloadUrl = "${{ steps.create_release.outputs.url }}/releases/download/connector-${{ github.event.inputs.token }}/${{ env.INSTALLER_NAME }}"
-
-          # Costruiamo l'URL diretto all'asset (softprops action restituisce la release URL, non l'asset)
           $repo = "${{ github.repository }}"
-          $tag  = "connector-${{ github.event.inputs.token }}"
-          $name = "${{ env.INSTALLER_NAME }}"
+          $tag  = "connector-$env:ACTIVATION_TOKEN"
+          $name = $env:INSTALLER_NAME
           $downloadUrl = "https://github.com/$repo/releases/download/$tag/$name"
 
           $body = @{
-            token           = "${{ github.event.inputs.token }}"
-            consultantEmail = "${{ github.event.inputs.consultant_email }}"
-            companyName     = "${{ github.event.inputs.company_name }}"
+            token           = $env:ACTIVATION_TOKEN
+            consultantEmail = $env:CONSULTANT_EMAIL
+            companyName     = $env:COMPANY_NAME
             downloadUrl     = $downloadUrl
             secret          = "${{ secrets.CALLBACK_SECRET }}"
-          } | ConvertTo-Json
+          } | ConvertTo-Json -Compress
 
-          Invoke-RestMethod `
-            -Uri "${{ github.event.inputs.callback_url }}" `
-            -Method POST `
-            -ContentType "application/json" `
-            -Body $body
+          try {
+            Invoke-RestMethod -Uri $env:CALLBACK_URL -Method POST -ContentType "application/json" -Body $body
+            Write-Host "Webhook notified successfully"
+          } catch {
+            Write-Host "Webhook failed (non-blocking): $_"
+          }
