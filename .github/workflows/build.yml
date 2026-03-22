@@ -70,17 +70,28 @@ jobs:
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer_build.iss
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed" }
 
+      - name: List dist folder
+        shell: pwsh
+        run: |
+          Write-Host "Contents of dist/:"
+          Get-ChildItem dist\ | ForEach-Object { Write-Host "  $($_.Name)" }
+
       - name: Rename and set output paths
         shell: pwsh
         run: |
           $token = $env:ACTIVATION_TOKEN
           $short = $token.Substring(0, [Math]::Min(16, $token.Length))
-          $src = "dist\PresenzaCloud-Connector-Setup.exe"
+
+          # Trova l'exe generato da Inno Setup (qualunque sia il nome)
+          $generated = Get-ChildItem dist\ -Filter "*.exe" | Select-Object -First 1
+          if (-not $generated) { throw "Nessun .exe trovato in dist/" }
+          Write-Host "Found: $($generated.Name)"
+
           $dst = "dist\PresenzaCloud-Connector-Setup-$short.exe"
-          Rename-Item $src $dst
+          Rename-Item $generated.FullName $dst
           echo "INSTALLER_NAME=PresenzaCloud-Connector-Setup-$short.exe" >> $env:GITHUB_ENV
           echo "INSTALLER_PATH=dist\PresenzaCloud-Connector-Setup-$short.exe" >> $env:GITHUB_ENV
-          Write-Host "Installer: $dst"
+          Write-Host "Renamed to: $dst"
 
       - name: Create GitHub Release
         id: create_release
