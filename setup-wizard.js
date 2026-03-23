@@ -1,35 +1,34 @@
 #!/usr/bin/env node
 /**
- * PresenzaCloud Connector — Setup Wizard
+ * PresenzaCloud Connector — Setup Wizard v2.0.0
  *
- * Prima esecuzione: attiva il connector con il token generato dall'admin.
- * Se il token è già nel config.json (messo da te prima della visita),
- * l'attivazione è automatica senza che il consulente debba fare nulla.
+ * Attiva il connector con lo studio_token generato dal backend.
+ * Al termine salva config.json con studioToken + lista aziende iniziale.
  */
 
-const https    = require("https");
-const http     = require("http");
-const fs       = require("fs");
-const path     = require("path");
+const https = require("https");
+const http = require("http");
+const fs = require("fs");
+const path = require("path");
 const readline = require("readline");
 
 const CONFIG_PATH = path.join(__dirname, "config.json");
 
 const C = {
   reset: "\x1b[0m", green: "\x1b[32m", yellow: "\x1b[33m",
-  red: "\x1b[31m",  cyan: "\x1b[36m",  bold: "\x1b[1m",
+  red: "\x1b[31m", cyan: "\x1b[36m", bold: "\x1b[1m",
 };
 
 function request(url, options = {}) {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
-    const lib    = parsed.protocol === "https:" ? https : http;
-    const body   = options.body ? JSON.stringify(options.body) : undefined;
-    const req    = lib.request({
+    const lib = parsed.protocol === "https:" ? https : http;
+    const body = options.body ? JSON.stringify(options.body) : undefined;
+    const req = lib.request({
       hostname: parsed.hostname,
-      port:     parsed.port || (parsed.protocol === "https:" ? 443 : 80),
-      path:     parsed.pathname + parsed.search,
-      method:   options.method || "POST",
+      port: parsed.port || (parsed.protocol === "https:" ? 443 : 80),
+      path: parsed.pathname + parsed.search,
+      method: options.method || "POST",
       headers: {
         "Content-Type": "application/json",
         ...(body ? { "Content-Length": Buffer.byteLength(body) } : {}),
@@ -58,9 +57,9 @@ function saveConfig(config) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf8");
 }
 
-async function activate(token, apiUrl) {
+async function activate(studioToken, apiUrl) {
   process.stdout.write(`\n${C.cyan}Connessione al server...${C.reset} `);
-  const url = `${apiUrl}/api/v1/integrations/activate/${token}`;
+  const url = `${apiUrl}/api/v1/integrations/activate/${studioToken}`;
   let res;
   try { res = await request(url); }
   catch (e) {
@@ -68,10 +67,9 @@ async function activate(token, apiUrl) {
     throw new Error(`Impossibile contattare il server: ${e.message}\nVerifica la connessione internet.`);
   }
   if (res.status === 404) throw new Error("Token non trovato. Verifica di aver copiato il token corretto.");
-  if (res.status === 410) throw new Error(res.body?.error ?? "Token già utilizzato o scaduto.");
-  if (res.status !== 200) throw new Error(`Errore server (HTTP ${res.status})`);
+  if (res.status !== 200) throw new Error(`Errore server (HTTP ${res.status}): ${JSON.stringify(res.body)}`);
   process.stdout.write(`${C.green}OK${C.reset}\n`);
-  return res.body;
+  return res.body; // { ok, studioToken, studioName, companies, apiUrl }
 }
 
 async function main() {
@@ -83,65 +81,72 @@ async function main() {
   const config = loadConfig();
 
   // Già configurato?
-  if (config.apiKey) {
-    console.log(`${C.green}✓${C.reset} Connector già configurato per: ${C.bold}${config.companyName ?? config.companyId}${C.reset}`);
-    console.log(`\nNessuna azione necessaria.\n`);
+  if (config.studioToken) {
+    console.log(`${C.green}✓${C.reset} Connector già configurato per: ${C.bold}${config.studioName ?? "Studio"}${C.reset}`);
+    const companies = config.companies ?? [];
+    if (companies.length > 0) {
+      console.log(`\nAziende collegate (${companies.length}):`);
+      for (const c of companies) {
+        console.log(`  • ${c.companyName}`);
+      }
+    }
+    console.log(`\nNessuna azione necessaria.`);
+    console.log(`\nSe è stata aggiunta una nuova azienda, esegui:`);
+    console.log(`  ${C.bold}node connector.js${C.reset}\n`);
     console.log("Premi INVIO per chiudere...");
     await new Promise(r => process.stdin.once("data", r));
     return;
   }
 
   const apiUrl = config.apiUrl ?? "https://backend-production-0f0b8.up.railway.app";
+  let studioToken = config.studioToken ?? null;
 
-  // Token già nel config (messo prima della visita)?
-  let token = config.activationToken ?? null;
-
-  if (token) {
+  if (studioToken) {
     console.log(`${C.yellow}Token trovato nel file di configurazione.${C.reset}`);
     console.log("Attivazione automatica in corso...\n");
   } else {
-    // Chiedi il token manualmente
-    console.log(`Benvenuto! Per completare la configurazione hai bisogno del`);
+    console.log(`Per completare la configurazione hai bisogno del`);
     console.log(`${C.bold}token di attivazione${C.reset} fornito da PresenzaCloud.\n`);
-
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    token = await new Promise(r => {
+    studioToken = await new Promise(r => {
       rl.question("Inserisci il token di attivazione: ", answer => {
         rl.close(); r(answer.trim());
       });
     });
   }
 
-  if (!token || token.length < 10) {
-    console.error(`\n${C.red}✗${C.reset} Token non valido.`);
-    process.exit(1);
+  if (!studioToken || studioToken.length < 10) {
+    console.error(`\n${C.red}✗${C.reset} Token non valido.`); process.exit(1);
   }
 
   let result;
-  try {
-    result = await activate(token, apiUrl);
-  } catch (e) {
+  try { result = await activate(studioToken, apiUrl); }
+  catch (e) {
     console.error(`\n${C.red}✗ Errore:${C.reset} ${e.message}`);
     console.log("\nPremi INVIO per chiudere...");
     await new Promise(r => process.stdin.once("data", r));
     process.exit(1);
   }
 
-  // Salva config.json definitivo
+  // Salva config con studioToken (le aziende si scaricano dinamicamente ad ogni run)
   const finalConfig = {
-    apiKey:      result.apiKey,
-    companyId:   result.companyId,
-    companyName: result.companyName,
+    studioToken: result.studioToken,
+    studioName: result.studioName,
     apiUrl,
-    outputPath:  "./output",
-    schedule:    "0 23 * * *",
+    outputPath: "./output",
+    schedule: "0 23 * * *",
   };
   saveConfig(finalConfig);
 
   console.log(`\n${C.green}${C.bold}✓ Configurazione completata!${C.reset}\n`);
-  console.log(`  Azienda  : ${C.bold}${result.companyName}${C.reset}`);
-  console.log(`  API Key  : ${result.apiKey.slice(0, 12)}...`);
-  console.log(`\nIl connector è pronto. Per sincronizzare i dati esegui:`);
+  console.log(`  Studio   : ${C.bold}${result.studioName}${C.reset}`);
+  console.log(`  Aziende  : ${result.companies?.length ?? 0} collegata/e`);
+  if (result.companies?.length > 0) {
+    for (const c of result.companies) {
+      console.log(`             • ${c.companyName}`);
+    }
+  }
+  console.log(`\nEsegui il connector con:`);
   console.log(`  ${C.bold}node connector.js${C.reset}\n`);
   console.log("Premi INVIO per chiudere...");
   await new Promise(r => process.stdin.once("data", r));
